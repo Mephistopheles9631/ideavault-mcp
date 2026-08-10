@@ -1,12 +1,26 @@
 # ideavault-mcp
 
 A personal MCP server that turns this machine's project folders into an Obsidian
-vault of ideas, with a few scoped external-research tools alongside it. One
-Express endpoint, no upstream LLM calls from the server itself — Claude (via
-Claude Code, Claude.ai, or the Claude mobile app) reads and writes the vault
-and calls these external services directly through the tools.
+vault of ideas, with a few scoped external-research tools and a structural
+code-graph alongside it. One Express endpoint, no upstream LLM calls from the
+server itself — Claude (via Claude Code, Claude.ai, or the Claude mobile app)
+reads and writes the vault and calls these external services directly through
+the tools.
 
 Vault lives at `~/ideavault/Projects/*.md` — open that folder directly in Obsidian.
+
+**Architecture note:** the code-graph tools aren't implemented here — they're
+[codebase-memory](../codebase-memory) (a separate Python/SQLite/tree-sitter
+project) spawned as a persistent child process at startup and proxied in over
+MCP's stdio client transport (`src/codebaseMemory.ts`). One external MCP
+surface, one systemd service, one auth boundary — but two independent engines
+behind it, so neither codebase had to be rewritten in the other's language to
+merge them. If the child process connection drops, the whole server exits
+(`process.exit(1)`) rather than silently running vault-only, so systemd's
+`Restart=on-failure` brings both back up together instead of masking a real
+crash. **Don't also run codebase-memory as its own separate stdio MCP server**
+(e.g. via `claude mcp add`) alongside this — both would open the same SQLite
+DB file concurrently, which risks lock contention.
 
 ## Tools
 
@@ -37,6 +51,32 @@ Note frontmatter: `repo, status (idea/in-progress/blocked/done/abandoned), tags[
 | `github_search_code` | Search public GitHub code for reference implementations | `GITHUB_TOKEN` in `.env` |
 | `telegram_bot_info` | A bot's public info via Telegram's `getMe` — token never leaves the server | `TELEGRAM_BOT_TOKEN_<NAME>` in `.env` per bot |
 | `fetch_docs` | Fetches page text, restricted to an allowlist: docs.rs, pypi.org, solana.com, jup.ag, github.com, raw.githubusercontent.com, telegram.org | nothing |
+
+**Code graph** (proxied from [codebase-memory](../codebase-memory), read the
+architecture note above)
+
+| Tool | What it does |
+|---|---|
+| `index_repository` | Index (or re-index) a local repo into the graph via tree-sitter — call once per project before the others |
+| `list_projects` | List every indexed project with file/symbol counts |
+| `search_symbols` | Find functions/methods/classes by name substring |
+| `get_symbol_overview` | One call for "show me this function and what touches it" — source + callers + callees |
+| `get_code_snippet` | Just one function's source by qualified name, without reading the whole file |
+| `trace_calls` | Walk the call graph around a symbol (callers/callees/both, 1-4 hops) |
+| `get_architecture` | Language breakdown, symbol counts, top folders, hotspot files — orient in an unfamiliar repo |
+| `detect_changes` | Map uncommitted git changes to the symbols they touched, plus a rough blast-radius (caller count) |
+
+6 languages: C#, Python, JS, TS/TSX, Rust, Go. `project` is optional on every
+query tool except `index_repository` — omit it and the last project named
+anywhere on this server is reused. Note this "last project" state now lives
+in the one shared codebase-memory child process behind this HTTP server
+rather than a stdio process per Claude Code session (its original design) —
+fine for one person using one project at a time, but a second concurrent
+caller working on a different repo will get the first caller's active
+project if it omits `project` too. Pass `project` explicitly to avoid
+relying on this. See codebase-memory's own docstring (`server.py`) for the
+full scope/limitations (name-based call resolution, no type inference, no
+cross-repo graph).
 
 ## Local dev
 

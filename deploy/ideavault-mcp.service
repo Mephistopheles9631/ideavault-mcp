@@ -1,5 +1,5 @@
 [Unit]
-Description=ideavault-mcp — personal repo/idea tracker MCP server
+Description=ideavault-mcp — personal repo/idea tracker + code-graph MCP server (proxies codebase-memory internally)
 After=network.target
 
 [Service]
