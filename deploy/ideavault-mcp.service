@@ -1,0 +1,35 @@
+[Unit]
+Description=ideavault-mcp — personal repo/idea tracker MCP server
+After=network.target
+
+[Service]
+Type=simple
+User=mephisto
+WorkingDirectory=/home/mephisto/ideavault-mcp
+EnvironmentFile=/home/mephisto/ideavault-mcp/.env
+ExecStart=/home/mephisto/.nvm/versions/node/v26.1.0/bin/node /home/mephisto/ideavault-mcp/dist/server.js
+Restart=on-failure
+RestartSec=2
+
+# Hardening. Filesystem sandboxing (ProtectSystem/ProtectHome) is deliberately
+# skipped: the app's whole job is reading/writing across the home directory,
+# so confining that would just break it. These, however, are safe no-ops for
+# a plain Node HTTP server + git subprocess, and shrink what a hypothetical
+# RCE (e.g. a compromised dependency) could do to the rest of the box.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

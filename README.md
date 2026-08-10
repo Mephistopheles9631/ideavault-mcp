@@ -1,0 +1,150 @@
+# ideavault-mcp
+
+A personal MCP server that turns this machine's project folders into an Obsidian
+vault of ideas, with a few scoped external-research tools alongside it. One
+Express endpoint, no upstream LLM calls from the server itself — Claude (via
+Claude Code, Claude.ai, or the Claude mobile app) reads and writes the vault
+and calls these external services directly through the tools.
+
+Vault lives at `~/ideavault/Projects/*.md` — open that folder directly in Obsidian.
+
+## Tools
+
+**Vault (repos + notes)**
+
+| Tool | What it does |
+|---|---|
+| `list_repos` | Scans `REPOS_DIR` (default: home dir), detects stack (node/python/rust/go/dotnet), flags which repos already have a note |
+| `list_repo_files` | Lists files/folders inside a repo so Claude can decide what to read before writing a note. Skips node_modules/.git/etc and secret-looking files |
+| `read_repo_file` | Reads a text file's contents (README, source, config) from inside a repo. Refuses binaries and anything matching a secret/key-file pattern. Capped at 200KB |
+| `write_repo_file` | Creates/overwrites a file inside a repo. If the repo has no `.git` yet, runs `git init` + a snapshot commit first. Doesn't commit its own change — review with `git diff` |
+| `edit_repo_file` | Precise search-replace on an existing file — `old_string` must match exactly once. Same guardrails and git safety net as `write_repo_file` |
+| `get_idea` | Reads one repo's note (frontmatter + body) |
+| `upsert_idea` | Creates/updates a note — status, tags, blockers, next_steps, body. Omitted fields keep their old value |
+| `append_log` | Appends a dated line to a note's `## Log` section |
+| `list_ideas` | Lists all notes, filterable by `status` or `tag` |
+| `search_notes` | Full-text search across the vault |
+
+Note frontmatter: `repo, status (idea/in-progress/blocked/done/abandoned), tags[], blockers[], next_steps[], created, updated`.
+
+**External research** (scoped, not a general web-fetch tool)
+
+| Tool | What it does | Needs |
+|---|---|---|
+| `solana_get_mint_info` | On-chain mint info (supply, decimals, authorities) via public RPC | nothing |
+| `solana_get_token_price` | Price/liquidity via Jupiter's price API (v3) | nothing |
+| `package_registry_search` | crates.io fuzzy search, or PyPI exact-name lookup (no public PyPI search API exists) | nothing |
+| `github_search_code` | Search public GitHub code for reference implementations | `GITHUB_TOKEN` in `.env` |
+| `telegram_bot_info` | A bot's public info via Telegram's `getMe` — token never leaves the server | `TELEGRAM_BOT_TOKEN_<NAME>` in `.env` per bot |
+| `fetch_docs` | Fetches page text, restricted to an allowlist: docs.rs, pypi.org, solana.com, jup.ag, github.com, raw.githubusercontent.com, telegram.org | nothing |
+
+## Local dev
+
+```bash
+npm install
+cp .env.example .env   # edit AUTH_TOKEN at minimum
+npm run build && npm start
+# or: npm run dev   (tsx watch, no build step)
+```
+
+Smoke test:
+
+```bash
+curl http://127.0.0.1:3007/health
+
+curl -X POST http://127.0.0.1:3007/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+## Deploy (this machine, following the existing app-me.online pattern)
+
+Port **3007** is used here since 3000-3003/3005/3006 are already taken by
+app1-4/sift/muse (see `../NGINX.md`).
+
+1. `npm run build`
+2. Fill in `.env` (real `AUTH_TOKEN` — generate with `openssl rand -hex 32`)
+3. Install the systemd unit:
+   ```bash
+   sudo cp deploy/ideavault-mcp.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now ideavault-mcp
+   ```
+4. Add the nginx server block (`deploy/nginx-ideavault.conf`) next to your other
+   `app-me.online` blocks, then `certbot --nginx -d ideavault.app-me.online`.
+
+**Status: already deployed.** Live at `https://ideavault.app-me.online`, systemd
+service running, DNS auto-synced by the existing `namecheap-ddns` timer (it
+discovers hosts straight from nginx `server_name` directives — no config
+changes needed there), cert auto-renews via certbot's timer.
+
+## Connect Claude to it
+
+**Claude Code** (this machine or any other):
+```bash
+claude mcp add --transport http ideavault https://ideavault.app-me.online/mcp \
+  --header "Authorization: Bearer <your AUTH_TOKEN>"
+```
+
+**Claude Desktop / Claude.ai / Claude mobile app**: custom connector URL entry
+(Settings → Connectors → Add custom connector) only showed up on claude.ai in a
+browser, not in the native mobile app UI — add it there and it syncs to mobile
+since connectors are account-level. The connector UI has no field for a static
+bearer header, so the token goes in the URL instead:
+```
+https://ideavault.app-me.online/mcp?token=<your AUTH_TOKEN>
+```
+The server checks `Authorization: Bearer`, `X-Vault-Token`, and `?token=` —
+whichever the client can send. Once added, it still needs to be toggled on
+per-conversation from the tools/connectors icon in the chat composer.
+
+## Security notes (personal-use tradeoffs, read before exposing to the internet)
+
+- Auth is a single static shared secret, not OAuth. Fine for a personal tool
+  used by one person, but anyone who gets the token gets full read/write on
+  your vault **and every repo's code** (write_repo_file/edit_repo_file are not
+  read-only). Treat the token like a password — this is the highest-stakes
+  tool on the connector.
+- `write_repo_file`/`edit_repo_file` never run `git commit`/`git push` for the
+  actual change — only a one-time snapshot commit if a repo had no `.git` at
+  all, to guarantee an undo path. Everything after that is a plain working-tree
+  edit: review with `git diff` / `git status` and commit yourself. Repos that
+  already had uncommitted changes before an edit get flagged (`hadPriorChanges`)
+  rather than silently folded in.
+- `POST /mcp` is rate-limited to 60 req/min per client IP (`src/rateLimit.ts`,
+  in-memory fixed window). Express is set to `trust proxy: loopback` so this
+  keys on the real client IP from nginx's `X-Forwarded-For`, not nginx's own
+  loopback address for every request.
+- The nginx site (`deploy/nginx-ideavault.conf`) has `access_log off` — the
+  token travels as `?token=...` for clients with no header field, and nginx's
+  default log format would otherwise write that in plaintext to
+  `/var/log/nginx/access.log` on every request.
+- The systemd unit (`deploy/ideavault-mcp.service`) drops all Linux
+  capabilities and blocks kernel/namespace/cgroup access
+  (`NoNewPrivileges`, `ProtectKernelTunables`, `RestrictNamespaces`, etc.) —
+  standard hardening for a plain Node HTTP server, shrinks what a
+  hypothetical RCE (e.g. a compromised npm dependency) could reach.
+  Filesystem sandboxing (`ProtectHome`/`ProtectSystem`) is deliberately
+  *not* used since the app's whole job is read/write across the home directory.
+- If you want more isolation than "public subdomain + secret token," put this
+  behind Tailscale instead of the public nginx route and skip the token
+  entirely — probably the better long-term answer for a homelab tool like this.
+- `Origin` header is checked against `ALLOWED_ORIGINS` (default `https://claude.ai`)
+  only when the header is present — non-browser clients (curl, Claude Code) don't
+  send one, so they're unaffected.
+- Rotate `AUTH_TOKEN` (`openssl rand -hex 32`, update `.env`, `sudo systemctl
+  restart ideavault-mcp`) any time it's been displayed somewhere it shouldn't
+  live long-term — e.g. pasted into a chat transcript.
+- `read_repo_file`/`list_repo_files` refuse dotfiles, `.env*`, `*.pem`/`*.key`,
+  `id_rsa`/`id_ed25519`, and filenames that look like secrets/credentials/wallet
+  keypairs (several of these repos hold Solana keypairs as plain JSON). It's a
+  filename-pattern blocklist, not content scanning — good enough for a personal
+  tool, not a substitute for actually keeping keys out of these directories.
+
+## Roadmap ideas (not built yet)
+
+- Bulk-seed notes for every repo in `list_repos` that has `hasNote: false`
+- A `build-mcp-app` widget for browsing/filtering ideas visually in chat
+- Swap the static token for OAuth (CIMD) if this ever needs to support more
+  than one person
