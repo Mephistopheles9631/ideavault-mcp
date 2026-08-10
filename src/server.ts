@@ -14,6 +14,7 @@ import {
   getTelegramBotInfo,
   fetchDocs,
 } from "./external.js";
+import { connectCodebaseMemory, getProxiedTools, callProxiedTool } from "./codebaseMemory.js";
 
 const STATUS_VALUES = ["idea", "in-progress", "blocked", "done", "abandoned"] as const;
 
@@ -24,7 +25,10 @@ function mcpServer(): McpServer {
       instructions:
         "Personal repo/idea tracker. Call list_repos to see what's on disk, get_idea to read a project's notes, " +
         "upsert_idea to create or update a note, append_log to add a dated journal line, list_ideas to browse by " +
-        "status/tag, and search_notes for full-text search across the vault.",
+        "status/tag, and search_notes for full-text search across the vault. Also includes codebase-memory's " +
+        "structural code-graph tools (search_symbols, get_symbol_overview, get_code_snippet, trace_calls, " +
+        "get_architecture, detect_changes, index_repository, list_projects) proxied in from a local engine -- " +
+        "prefer those over Grep/Read for 'what calls X' / 'show me this function' style questions on indexed repos.",
     },
   );
 
@@ -279,6 +283,17 @@ function mcpServer(): McpServer {
     },
   );
 
+  for (const tool of getProxiedTools()) {
+    server.registerTool(
+      tool.name,
+      { description: tool.description, inputSchema: tool.inputSchema },
+      async (args: Record<string, unknown>) => {
+        const result = await callProxiedTool(tool.name, args);
+        return result as { content: Array<{ type: "text"; text: string }> };
+      },
+    );
+  }
+
   return server;
 }
 
@@ -302,6 +317,7 @@ app.post("/mcp", rateLimit, validateOrigin, requireToken, async (req, res) => {
 });
 
 const port = Number(process.env.PORT ?? 3007);
+await connectCodebaseMemory();
 app.listen(port, "127.0.0.1", () => {
   console.log(`ideavault-mcp listening on 127.0.0.1:${port}`);
 });
