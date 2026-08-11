@@ -85,19 +85,55 @@ export async function searchGithubCode(query: string): Promise<unknown> {
   return json.items ?? [];
 }
 
-// --- Telegram bot info -----------------------------------------------------
+// --- Telegram bot info / send ----------------------------------------------
 
-export async function getTelegramBotInfo(botName: string): Promise<unknown> {
-  const envKey = `TELEGRAM_BOT_TOKEN_${botName.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+function telegramEnvSuffix(botName: string): string {
+  return botName.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+}
+
+function requireBotToken(botName: string): string {
+  const envKey = `TELEGRAM_BOT_TOKEN_${telegramEnvSuffix(botName)}`;
   const token = process.env[envKey];
   if (!token) {
     throw new Error(
       `${envKey} not configured. Copy that bot's token from its own repo's .env into ideavault-mcp/.env as ${envKey}=..., then restart the service.`,
     );
   }
+  return token;
+}
+
+export async function getTelegramBotInfo(botName: string): Promise<unknown> {
+  const token = requireBotToken(botName);
   let res: Response;
   try {
     res = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: timeoutSignal() });
+  } catch {
+    throw new Error("Failed to reach Telegram API (network error).");
+  }
+  if (!res.ok) throw new Error(`Telegram API returned ${res.status}`);
+  const json = (await res.json()) as { ok: boolean; result?: unknown; description?: string };
+  if (!json.ok) throw new Error(json.description ?? "Telegram API call failed");
+  return json.result;
+}
+
+export async function sendTelegramMessage(botName: string, text: string, chatId?: string): Promise<unknown> {
+  const token = requireBotToken(botName);
+  const chatIdEnvKey = `TELEGRAM_CHAT_ID_${telegramEnvSuffix(botName)}`;
+  const targetChatId = chatId ?? process.env[chatIdEnvKey];
+  if (!targetChatId) {
+    throw new Error(
+      `No chat_id given and ${chatIdEnvKey} isn't set in .env. Message the bot once from the target chat, then ` +
+        `read the numeric chat id off https://api.telegram.org/bot<token>/getUpdates, or pass chat_id explicitly.`,
+    );
+  }
+  let res: Response;
+  try {
+    res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: targetChatId, text, disable_web_page_preview: true }),
+      signal: timeoutSignal(),
+    });
   } catch {
     throw new Error("Failed to reach Telegram API (network error).");
   }

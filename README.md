@@ -51,6 +51,7 @@ Note frontmatter: `repo, status (idea/in-progress/blocked/done/abandoned), tags[
 | `package_registry_search` | crates.io fuzzy search, or PyPI exact-name lookup (no public PyPI search API exists) | nothing |
 | `github_search_code` | Search public GitHub code for reference implementations | `GITHUB_TOKEN` in `.env` |
 | `telegram_bot_info` | A bot's public info via Telegram's `getMe` — token never leaves the server | `TELEGRAM_BOT_TOKEN_<NAME>` in `.env` per bot |
+| `telegram_send_message` | Send a plain-text message via a bot you control — e.g. notify yourself | `TELEGRAM_BOT_TOKEN_<NAME>` in `.env`; `chat_id` param or `TELEGRAM_CHAT_ID_<NAME>` in `.env` |
 | `fetch_docs` | Fetches page text, restricted to an allowlist: docs.rs, pypi.org, solana.com, jup.ag, github.com, raw.githubusercontent.com, telegram.org | nothing |
 
 **Code graph** (proxied from [codebase-memory](codebase-memory), read the

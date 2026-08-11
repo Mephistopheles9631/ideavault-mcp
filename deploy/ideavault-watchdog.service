@@ -1,0 +1,8 @@
+[Unit]
+Description=ideavault-mcp — service health watchdog (alerts via Telegram, never restarts anything)
+After=network.target
+
+[Service]
+Type=oneshot
+User=mephisto
+ExecStart=/home/mephisto/ideavault-mcp/deploy/service-watchdog.sh

@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically run the service health watchdog
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=10s
+Unit=ideavault-watchdog.service
+
+[Install]
+WantedBy=timers.target

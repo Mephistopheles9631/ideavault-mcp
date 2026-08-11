@@ -12,6 +12,7 @@ import {
   searchPackageRegistry,
   searchGithubCode,
   getTelegramBotInfo,
+  sendTelegramMessage,
   fetchDocs,
 } from "./external.js";
 import { connectCodebaseMemory, getProxiedTools, callProxiedTool } from "./codebaseMemory.js";
@@ -268,6 +269,27 @@ function mcpServer(): McpServer {
     async ({ bot_name }) => {
       const info = await getTelegramBotInfo(bot_name);
       return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    "telegram_send_message",
+    {
+      description:
+        "Send a plain-text message via a Telegram bot you control -- e.g. to notify yourself. Requires that bot's " +
+        "token as TELEGRAM_BOT_TOKEN_<NAME> in .env (same as telegram_bot_info). If chat_id is omitted, falls back " +
+        "to TELEGRAM_CHAT_ID_<NAME> in .env -- set that once (message the bot from the target chat, then read the " +
+        "numeric id off https://api.telegram.org/bot<token>/getUpdates) so it doesn't need to be passed every time.",
+      inputSchema: {
+        bot_name: z.string().describe("e.g. 'alicetgbot' — matched against TELEGRAM_BOT_TOKEN_<NAME>"),
+        text: z.string().describe("Message text, sent as plain text (no Markdown/HTML parsing)"),
+        chat_id: z.string().optional().describe("Target chat id. Omit to use TELEGRAM_CHAT_ID_<NAME> from .env"),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async ({ bot_name, text, chat_id }) => {
+      const result = await sendTelegramMessage(bot_name, text, chat_id);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     },
   );
 
