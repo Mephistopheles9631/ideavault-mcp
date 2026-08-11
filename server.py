@@ -81,6 +81,7 @@ def _project_row(conn, name: str):
     if sig is not None and sig != row["git_signature"]:
         indexer.index_repository(conn, row["name"], str(root))
         store.set_git_signature(conn, row["id"], sig)
+        conn.commit()
         row = conn.execute("SELECT * FROM projects WHERE id = ?", (row["id"],)).fetchone()
     return row
 
@@ -276,7 +277,7 @@ def _resolve_one_symbol(conn, project_id: int, qualified_name: str, file: str | 
         "it calls (best-effort name matching, no type inference -- may include false "
         "positives for overloaded/duplicate names, and calls into external libraries "
         "show up as unresolved leaf names). direction='both' returns one hop each way. "
-        "depth controls how many hops to expand (1-4). If qualified_name is ambiguous "
+        "depth controls how many hops to expand (1-10). If qualified_name is ambiguous "
         "(matches multiple symbols), pass `file` (exact path or unique suffix) to pick one. "
         "Use this instead of grepping for a function name across the repo."
     ),
@@ -291,7 +292,7 @@ def trace_calls(
 ) -> dict:
     if direction not in ("callers", "callees", "both"):
         raise ToolError("direction must be 'callers', 'callees', or 'both'")
-    depth = max(1, min(depth, 4))
+    depth = max(1, min(depth, 10))
     project = _project_name(project)
     conn = _conn()
     p = _project_row(conn, project)
@@ -303,7 +304,11 @@ def trace_calls(
     def callees_of(sym):
         return _callees_of(conn, p["id"], sym)
 
-    MAX_NODES = 150
+    # A safety valve, not a practical limit -- these are personal-repo-scale
+    # projects (low hundreds of symbols at most), so the BFS naturally
+    # terminates via visited_ids/empty frontier well below this. It exists to
+    # bound a genuinely pathological graph, not to truncate real results.
+    MAX_NODES = 2000
 
     def bfs(expand_fn, direction_label):
         visited_ids = {root["id"]}
@@ -545,6 +550,78 @@ def get_architecture(project: str | None = None) -> dict:
         "top_level_folders": top_folders,
         "hotspot_files": hotspots,
     }
+
+
+@mcp.tool(
+    description=(
+        "A capped snapshot of a whole project's own internal call graph, for an "
+        "overview rather than trace_calls' single-symbol trace: its highest-degree "
+        "symbols (most callers+callees combined, a proxy for structural centrality) "
+        "and the call edges among just those symbols. Use this to render or reason "
+        "about a project's overall shape -- e.g. several projects side by side -- "
+        "not to find a specific function (use search_symbols/trace_calls for that). "
+        "limit caps how many symbols are included (default 40, max 200)."
+    ),
+    annotations=RO,
+)
+def project_graph(project: str | None = None, limit: int = 40) -> dict:
+    project = _project_name(project)
+    conn = _conn()
+    p = _project_row(conn, project)
+    pid = p["id"]
+    limit = max(1, min(limit, 200))
+
+    rows = conn.execute(
+        """
+        WITH out_deg AS (
+            SELECT caller_symbol_id AS sid, COUNT(*) AS c
+            FROM calls WHERE project_id = ? GROUP BY caller_symbol_id
+        ), in_deg AS (
+            SELECT callee.id AS sid, COUNT(*) AS c
+            FROM calls c2
+            JOIN symbols callee ON callee.project_id = c2.project_id AND callee.name = c2.callee_name
+            WHERE c2.project_id = ?
+            GROUP BY callee.id
+        )
+        SELECT s.id, s.qualified_name, s.kind, f.path AS file,
+               COALESCE(out_deg.c, 0) + COALESCE(in_deg.c, 0) AS degree
+        FROM symbols s
+        JOIN files f ON f.id = s.file_id
+        LEFT JOIN out_deg ON out_deg.sid = s.id
+        LEFT JOIN in_deg ON in_deg.sid = s.id
+        WHERE s.project_id = ?
+        ORDER BY degree DESC
+        LIMIT ?
+        """,
+        (pid, pid, pid, limit),
+    ).fetchall()
+
+    # Symbol id, not qualified_name, is the node identity: the same bare name
+    # (e.g. "main") commonly labels multiple distinct symbols in one project
+    # (one per file), so name alone would collide two unrelated functions
+    # into one graph node and misattribute edges between them.
+    node_ids = [r["id"] for r in rows]
+    nodes = [
+        {"id": r["id"], "qualified_name": r["qualified_name"], "kind": r["kind"], "file": r["file"], "degree": r["degree"]}
+        for r in rows
+    ]
+
+    edges: list[dict] = []
+    if node_ids:
+        placeholders = ",".join("?" for _ in node_ids)
+        edge_rows = conn.execute(
+            f"""
+            SELECT DISTINCT caller.id AS from_id, callee.id AS to_id
+            FROM calls c
+            JOIN symbols caller ON caller.id = c.caller_symbol_id
+            JOIN symbols callee ON callee.project_id = caller.project_id AND callee.name = c.callee_name
+            WHERE caller.project_id = ? AND caller.id IN ({placeholders}) AND callee.id IN ({placeholders})
+            """,
+            (pid, *node_ids, *node_ids),
+        ).fetchall()
+        edges = [{"from": r["from_id"], "to": r["to_id"]} for r in edge_rows]
+
+    return {"project": project, "nodes": nodes, "edges": edges}
 
 
 if __name__ == "__main__":
