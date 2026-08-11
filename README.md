@@ -62,7 +62,7 @@ architecture note above)
 | `search_symbols` | Find functions/methods/classes by name substring |
 | `get_symbol_overview` | One call for "show me this function and what touches it" — source + callers + callees |
 | `get_code_snippet` | Just one function's source by qualified name, without reading the whole file |
-| `trace_calls` | Walk the call graph around a symbol (callers/callees/both, 1-4 hops) |
+| `trace_calls` | Walk the call graph around a symbol (callers/callees/both, 1-10 hops) |
 | `get_architecture` | Language breakdown, symbol counts, top folders, hotspot files — orient in an unfamiliar repo |
 | `detect_changes` | Map uncommitted git changes to the symbols they touched, plus a rough blast-radius (caller count) |
 
@@ -78,14 +78,46 @@ relying on this. See codebase-memory's own docstring (`server.py`) for the
 full scope/limitations (name-based call resolution, no type inference, no
 cross-repo graph).
 
+## Graph UI
+
+A small visual dashboard for the code graph, served by this same process —
+open `https://ideavault.app-me.online/` (or `http://127.0.0.1:3007/` locally)
+in a browser instead of going through chat. Source in `web/` (Vite + React +
+TypeScript + Tailwind + Cytoscape.js), built to static files and served via
+`express.static`.
+
+- **Dashboard** — `get_architecture` as language/symbol-kind charts, top
+  folders, hotspot files.
+- **Search** — `search_symbols`, click a result to open it in Graph view.
+- **Graph** — `trace_calls` rendered as an actual node/edge graph (callers,
+  callees, or both; depth 1-4), with the selected symbol's source
+  (`get_code_snippet`) alongside it.
+- **Changes** — `detect_changes`: uncommitted edits mapped to the symbols
+  they touched, with the existing caller-count risk heuristic.
+
+It talks to a handful of new read-only JSON routes under `/api/graph/*`
+(`src/graphApi.ts`) that wrap the same proxied codebase-memory tool calls the
+MCP surface uses — no second engine, no direct SQLite access from the UI.
+Those routes sit behind the same `rateLimit` → `validateOrigin` →
+`requireToken` chain as `/mcp`. The static page itself is unauthenticated
+(it's just HTML/JS/CSS); on first load it prompts for `AUTH_TOKEN` and stores
+it in `localStorage`, sending it as `Authorization: Bearer` on every API
+call — same token as everywhere else, no second credential.
+
 ## Local dev
 
 ```bash
 npm install
 cp .env.example .env   # edit AUTH_TOKEN at minimum
 npm run build && npm start
-# or: npm run dev   (tsx watch, no build step)
+# or: npm run dev   (tsx watch, no build step — but the UI needs its own build below)
 ```
+
+`npm run build` builds both the server and the web UI (`build:web` runs
+`npm --prefix web run build`, needs `cd web && npm install` once first). For
+UI-only iteration with hot reload: `cd web && npm install && npm run dev` —
+its dev server proxies `/api` to `127.0.0.1:3007`, so run the main server
+(`npm run dev` at the repo root) alongside it.
 
 Smoke test:
 
@@ -181,6 +213,11 @@ per-conversation from the tools/connectors icon in the chat composer.
   keypairs (several of these repos hold Solana keypairs as plain JSON). It's a
   filename-pattern blocklist, not content scanning — good enough for a personal
   tool, not a substitute for actually keeping keys out of these directories.
+- The Graph UI stores `AUTH_TOKEN` in the browser's `localStorage` after you
+  enter it once — same token as everywhere else, so anyone with it still has
+  full read/write, not just graph-read access. `/api/graph/*` is read-only,
+  but the token itself isn't scoped down for the browser. Fine on a device
+  you trust; don't paste the token into that prompt on a shared machine.
 
 ## Roadmap ideas (not built yet)
 

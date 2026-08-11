@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p .",
+    "build": "tsc -p . && npm run build:web",
+    "build:web": "npm --prefix web run build",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts"
   },

@@ -15,6 +15,9 @@ import {
   fetchDocs,
 } from "./external.js";
 import { connectCodebaseMemory, getProxiedTools, callProxiedTool } from "./codebaseMemory.js";
+import { graphApi } from "./graphApi.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const STATUS_VALUES = ["idea", "in-progress", "blocked", "done", "abandoned"] as const;
 
@@ -315,6 +318,16 @@ app.post("/mcp", rateLimit, validateOrigin, requireToken, async (req, res) => {
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
+
+// Read-only JSON API for the graph UI (web/). Same auth chain as /mcp; the
+// UI itself sends the token as an Authorization header, not a query param.
+app.use("/api/graph", rateLimit, validateOrigin, requireToken, graphApi);
+
+// The graph UI's static build. Served unauthenticated like any SPA shell —
+// it's just HTML/JS/CSS with no data in it; every real query goes through
+// /api/graph above, which stays behind the token.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.use(express.static(path.join(__dirname, "../web/dist")));
 
 const port = Number(process.env.PORT ?? 3007);
 await connectCodebaseMemory();
