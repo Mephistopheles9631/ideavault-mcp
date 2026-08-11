@@ -12,10 +12,16 @@
 import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const PYTHON_BIN = "/home/mephisto/codebase-memory/.venv/bin/python";
-const SERVER_PATH = "/home/mephisto/codebase-memory/server.py";
-const CWD = "/home/mephisto/codebase-memory";
+// codebase-memory used to be a separate repo/checkout at a fixed absolute
+// path; it's now the codebase-memory/ subdirectory of this repo, so its
+// location is derived from this file's own path instead of hardcoded.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CWD = path.join(__dirname, "../codebase-memory");
+const PYTHON_BIN = path.join(CWD, ".venv/bin/python");
+const SERVER_PATH = path.join(CWD, "server.py");
 
 export interface ProxiedTool {
   name: string;

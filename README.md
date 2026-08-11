@@ -10,8 +10,9 @@ the tools.
 Vault lives at `~/ideavault/Projects/*.md` — open that folder directly in Obsidian.
 
 **Architecture note:** the code-graph tools aren't implemented here — they're
-[codebase-memory](../codebase-memory) (a separate Python/SQLite/tree-sitter
-project) spawned as a persistent child process at startup and proxied in over
+[codebase-memory](codebase-memory) (a Python/SQLite/tree-sitter engine, its
+own repo history preserved via `git subtree` when it was folded in here)
+spawned as a persistent child process at startup and proxied in over
 MCP's stdio client transport (`src/codebaseMemory.ts`). One external MCP
 surface, one systemd service, one auth boundary — but two independent engines
 behind it, so neither codebase had to be rewritten in the other's language to
@@ -52,7 +53,7 @@ Note frontmatter: `repo, status (idea/in-progress/blocked/done/abandoned), tags[
 | `telegram_bot_info` | A bot's public info via Telegram's `getMe` — token never leaves the server | `TELEGRAM_BOT_TOKEN_<NAME>` in `.env` per bot |
 | `fetch_docs` | Fetches page text, restricted to an allowlist: docs.rs, pypi.org, solana.com, jup.ag, github.com, raw.githubusercontent.com, telegram.org | nothing |
 
-**Code graph** (proxied from [codebase-memory](../codebase-memory), read the
+**Code graph** (proxied from [codebase-memory](codebase-memory), read the
 architecture note above)
 
 | Tool | What it does |
