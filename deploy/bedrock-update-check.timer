@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily check for a new Bedrock server version
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1d
+Persistent=true
+Unit=bedrock-update-check.service
+
+[Install]
+WantedBy=timers.target

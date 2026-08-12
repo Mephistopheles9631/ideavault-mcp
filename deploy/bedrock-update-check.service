@@ -1,0 +1,8 @@
+[Unit]
+Description=ideavault-mcp — check for a new Bedrock server version (notify-only, never auto-applies)
+After=network.target
+
+[Service]
+Type=oneshot
+User=mephisto
+ExecStart=/home/mephisto/ideavault-mcp/deploy/bedrock-update-check.sh
