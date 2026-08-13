@@ -35,10 +35,12 @@ CREATE TABLE IF NOT EXISTS symbols (
     start_byte INTEGER NOT NULL,
     end_byte INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
-CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name ON symbols(qualified_name);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
-CREATE INDEX IF NOT EXISTS idx_symbols_project ON symbols(project_id);
+-- project_id leads both composites, so it also serves any project_id-only
+-- query (COUNT(*) per project, GROUP BY kind, etc.) via prefix match --
+-- no separate single-column project_id index needed.
+CREATE INDEX IF NOT EXISTS idx_symbols_project_name ON symbols(project_id, name);
+CREATE INDEX IF NOT EXISTS idx_symbols_project_qualified_name ON symbols(project_id, qualified_name);
 
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY,
@@ -47,7 +49,7 @@ CREATE TABLE IF NOT EXISTS calls (
     callee_name TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_calls_caller ON calls(caller_symbol_id);
-CREATE INDEX IF NOT EXISTS idx_calls_callee_name ON calls(callee_name);
+CREATE INDEX IF NOT EXISTS idx_calls_project_callee ON calls(project_id, callee_name);
 """
 
 
@@ -65,6 +67,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
     if "git_signature" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN git_signature TEXT")
+
+    # Every real query against symbols/calls filters by project_id combined
+    # with name/qualified_name/callee_name -- these single-column indexes
+    # only let the planner narrow by project_id (SEARCH ... USING INDEX
+    # idx_symbols_project) and then scan-filter the rest by hand. Superseded
+    # by the composite indexes below, which serve the same project_id-only
+    # queries via prefix match too.
+    for stale in ("idx_symbols_name", "idx_symbols_qualified_name", "idx_symbols_project", "idx_calls_callee_name"):
+        conn.execute(f"DROP INDEX IF EXISTS {stale}")
 
 
 def set_git_signature(conn: sqlite3.Connection, project_id: int, signature: str | None) -> None:
