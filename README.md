@@ -1,11 +1,12 @@
 # ideavault-mcp
 
 A personal MCP server that turns this machine's project folders into an Obsidian
-vault of ideas, with a few scoped external-research tools and a structural
-code-graph alongside it. One Express endpoint, no upstream LLM calls from the
-server itself — Claude (via Claude Code, Claude.ai, or the Claude mobile app)
-reads and writes the vault and calls these external services directly through
-the tools.
+vault of ideas, with a few scoped external-research tools, a structural
+code-graph, and ops automation (service health, Bedrock version checks, and
+two-way Telegram control) alongside it. One Express endpoint, no upstream LLM
+calls from the server itself — Claude (via Claude Code, Claude.ai, or the
+Claude mobile app) reads and writes the vault and calls these external
+services directly through the tools.
 
 Vault lives at `~/ideavault/Projects/*.md` — open that folder directly in Obsidian.
 
@@ -67,8 +68,9 @@ architecture note above)
 | `trace_calls` | Walk the call graph around a symbol (callers/callees/both, 1-10 hops) |
 | `get_architecture` | Language breakdown, symbol counts, top folders, hotspot files — orient in an unfamiliar repo |
 | `detect_changes` | Map uncommitted git changes to the symbols they touched, plus a rough blast-radius (caller count) |
+| `project_graph` | A capped snapshot of a project's whole call graph — highest-degree symbols and the edges among them, for an overview rather than one symbol's trace. Powers the Graph UI's dashboard |
 
-6 languages: C#, Python, JS, TS/TSX, Rust, Go. `project` is optional on every
+7 languages: C#, Python, JS, TS/TSX, Rust, Go, Bash. `project` is optional on every
 query tool except `index_repository` — omit it and the last project named
 anywhere on this server is reused. Note this "last project" state now lives
 in the one shared codebase-memory child process behind this HTTP server
@@ -105,6 +107,41 @@ Those routes sit behind the same `rateLimit` → `validateOrigin` →
 (it's just HTML/JS/CSS); on first load it prompts for `AUTH_TOKEN` and stores
 it in `localStorage`, sending it as `Authorization: Bearer` on every API
 call — same token as everywhere else, no second credential.
+
+## Ops automation
+
+Three pieces, all reporting to one Telegram chat (`NOTIFY_TELEGRAM_BOT_TOKEN`
+/ `NOTIFY_TELEGRAM_CHAT_ID` in `.env`) kept deliberately separate from any
+product bot's token, so ops alerts don't land somewhere end users can see
+them.
+
+**Service health watchdog** (`deploy/service-watchdog.sh`, a systemd timer
+every 5 minutes, read-only — never restarts anything) checks every service
+on this box two ways: is its port actually listening, not just is the unit
+"active" (a service can be active while restart-looping or with nothing
+bound), and has its restart count grown since the last check. Only state
+*transitions* page Telegram — newly broken, or newly recovered — so a
+service stuck down doesn't re-alert every 5 minutes. Covers bedrock-server,
+chatbot-app2, sift, sift-analytics, driverupdaterserver, namecheap-ddns, and
+ideavault-mcp itself.
+
+**Bedrock version checker** (`deploy/bedrock-update-check.sh`, a daily
+systemd timer) checks Mojang's official download API against the version
+`bedrock-server.service` is currently running. On a new release it downloads
+the zip and sends the exact `migrate-bedrock-server.sh` command to run —
+deliberately notify-only, not auto-applying, since that migration script has
+never been exercised against a real update yet.
+
+**Two-way Bedrock allowlist control** (`src/bedrockControl.ts`, in-process —
+this one needs a persistent connection rather than a periodic check, so it
+runs inside the Node server rather than as a standalone script) long-polls
+the same Telegram chat for `allowlist add <name>` / `allowlist remove <name>`
+and injects the corresponding command into the running server's `screen`
+console, replying with what the server actually logged. Also sends a
+notification on every player connect. **Security:** every inbound message is
+checked against `NOTIFY_TELEGRAM_CHAT_ID` before anything is actioned — this
+executes real commands against a live server with real players on it, so
+that check is hardcoded, not configurable away.
 
 ## Local dev
 
@@ -220,6 +257,12 @@ per-conversation from the tools/connectors icon in the chat composer.
   full read/write, not just graph-read access. `/api/graph/*` is read-only,
   but the token itself isn't scoped down for the browser. Fine on a device
   you trust; don't paste the token into that prompt on a shared machine.
+- A pre-commit hook (`.githooks/pre-commit`, active via `core.hooksPath`)
+  blocks commits that look like they contain a real secret — a staged `.env`
+  file under any name other than `.env.example`, private key headers, or
+  common token/key formats (AWS, GitHub, Slack, Google, JWT). Scoped to added
+  lines only, so it doesn't flag pre-existing content in touched files. A
+  fresh clone needs `git config core.hooksPath .githooks` once to enable it.
 
 ## Roadmap ideas (not built yet)
 
