@@ -3,6 +3,7 @@ import tree_sitter_javascript as tsjs
 import tree_sitter_typescript as tsts
 import tree_sitter_c_sharp as tscs
 import tree_sitter_rust as tsrust
+import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
 samples = {
@@ -54,6 +55,15 @@ impl Foo {
     fn baz(&self, x: i32) -> i32 { x }
 }
 fn qux(x: i32) -> i32 { x }
+"""),
+    "bash": (tsbash.language(), b"""
+foo() {
+  echo "hi"
+  bar "$1"
+}
+function baz {
+  qux $x
+}
 """),
 }
 

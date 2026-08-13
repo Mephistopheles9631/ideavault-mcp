@@ -8,6 +8,7 @@ node.child_by_field_name() -- not guessed from memory. See scratch_recon.py
 
 from dataclasses import dataclass, field
 
+import tree_sitter_bash as tsbash
 import tree_sitter_c_sharp as tscs
 import tree_sitter_go as tsgo
 import tree_sitter_javascript as tsjs
@@ -30,6 +31,8 @@ class LanguageConfig:
     function_types: dict[str, str] = field(default_factory=dict)
     # node types that represent a call expression
     call_types: frozenset[str] = frozenset()
+    # call node type -> field name holding the callee expression (default "function")
+    call_function_field: dict[str, str] = field(default_factory=dict)
     # node type (of the callee expression) -> field holding the final identifier,
     # for member/attribute/field access call targets (obj.method())
     member_access_types: dict[str, str] = field(default_factory=dict)
@@ -143,6 +146,22 @@ GO = LanguageConfig(
     method_receiver_field="receiver",
 )
 
+BASH = LanguageConfig(
+    name="bash",
+    ts_language=Language(tsbash.language()),
+    sep=".",
+    container_types={},
+    function_types={"function_definition": "Function"},
+    # Both `foo() { ... }` and `function foo { ... }` parse to the same
+    # function_definition node with a "name" field -- no special-casing
+    # needed for the two syntaxes.
+    call_types=frozenset({"command"}),
+    # Unlike the other languages here, the callee sits under a field named
+    # "name" (holding a command_name node), not "function".
+    call_function_field={"command": "name"},
+    member_access_types={},
+)
+
 EXTENSION_MAP: dict[str, LanguageConfig] = {
     ".py": PYTHON,
     ".js": JAVASCRIPT,
@@ -154,6 +173,8 @@ EXTENSION_MAP: dict[str, LanguageConfig] = {
     ".cs": CSHARP,
     ".rs": RUST,
     ".go": GO,
+    ".sh": BASH,
+    ".bash": BASH,
 }
 
 IGNORED_DIR_NAMES = {

@@ -59,7 +59,10 @@ def _resolve_callee_name(cfg: LanguageConfig, func_node: Node, src: bytes) -> st
         field_name = cfg.member_access_types[func_node.type]
         target = func_node.child_by_field_name(field_name)
         return _text(target, src) if target is not None else None
-    if "identifier" in func_node.type:
+    # Bash's call node (command) names its callee field "command_name"
+    # rather than wrapping an identifier node directly -- everything else
+    # supported so far exposes a bare identifier/field-access node here.
+    if "identifier" in func_node.type or func_node.type == "command_name":
         return _text(func_node, src)
     return None
 
@@ -128,7 +131,8 @@ def _walk(
             stack = stack + [name]
 
     elif t in cfg.call_types:
-        func_node = node.child_by_field_name("function")
+        field_name = cfg.call_function_field.get(t, "function")
+        func_node = node.child_by_field_name(field_name)
         if func_node is not None and current_symbol_id is not None:
             callee = _resolve_callee_name(cfg, func_node, src)
             if callee:

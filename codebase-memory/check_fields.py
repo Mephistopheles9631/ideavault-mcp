@@ -3,6 +3,7 @@ import tree_sitter_javascript as tsjs
 import tree_sitter_typescript as tsts
 import tree_sitter_c_sharp as tscs
 import tree_sitter_rust as tsrust
+import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
 def find(node, type_name):
@@ -22,6 +23,8 @@ cases = [
      ["class_declaration", "method_declaration", "invocation_expression", "member_access_expression"]),
     ("rust", tsrust.language(), b"impl Foo { fn bar(&self, x: i32) -> i32 { self.baz(x) + qux(x) } }\n",
      ["impl_item", "function_item", "call_expression", "field_expression"]),
+    ("bash", tsbash.language(), b"foo() {\n  bar \"$1\"\n}\nfunction baz {\n  qux $x\n}\n",
+     ["function_definition", "command", "command_name"]),
 ]
 
 for name, lang_capsule, src, types in cases:
