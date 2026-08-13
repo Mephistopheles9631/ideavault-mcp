@@ -17,6 +17,7 @@ import {
 } from "./external.js";
 import { connectCodebaseMemory, getProxiedTools, callProxiedTool } from "./codebaseMemory.js";
 import { graphApi } from "./graphApi.js";
+import { startBedrockControl } from "./bedrockControl.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -353,6 +354,7 @@ app.use(express.static(path.join(__dirname, "../web/dist")));
 
 const port = Number(process.env.PORT ?? 3007);
 await connectCodebaseMemory();
+startBedrockControl();
 app.listen(port, "127.0.0.1", () => {
   console.log(`ideavault-mcp listening on 127.0.0.1:${port}`);
 });
