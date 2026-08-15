@@ -1,0 +1,11 @@
+{
+  "services": [
+    { "unit": "bedrock-server.service", "proto": "udp", "port": "19132" },
+    { "unit": "chatbot-app2.service", "proto": "tcp", "port": "3001" },
+    { "unit": "sift.service", "proto": "tcp", "port": "3005" },
+    { "unit": "sift-analytics.service", "proto": "tcp", "port": "3010" },
+    { "unit": "driverupdaterserver.service", "proto": "tcp", "port": "3002" },
+    { "unit": "ideavault-mcp.service", "proto": "tcp", "port": "3007" },
+    { "unit": "namecheap-ddns.service", "proto": "", "port": "" }
+  ]
+}

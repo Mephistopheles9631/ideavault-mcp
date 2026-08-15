@@ -19,16 +19,11 @@ STATE_FILE="${STATE_DIR}/state"
 mkdir -p "${STATE_DIR}"
 
 # unit:protocol:port -- protocol/port blank for port-less oneshot units,
-# checked via is-failed instead of a port probe.
-SERVICES=(
-  "bedrock-server.service:udp:19132"
-  "chatbot-app2.service:tcp:3001"
-  "sift.service:tcp:3005"
-  "sift-analytics.service:tcp:3010"
-  "driverupdaterserver.service:tcp:3002"
-  "ideavault-mcp.service:tcp:3007"
-  "namecheap-ddns.service::"
-)
+# checked via is-failed instead of a port probe. Loaded from services.json
+# rather than hardcoded here, since src/opsControl.ts reads the same file to
+# know which units a Telegram "/fix <unit>" reply is allowed to restart --
+# one list gating a real privileged action beats two hand-kept copies.
+mapfile -t SERVICES < <(jq -r '.services[] | "\(.unit):\(.proto):\(.port)"' "${SCRIPT_DIR}/services.json")
 
 env_value() {
   local val
@@ -58,6 +53,39 @@ port_listening() {
   else
     ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q .
   fi
+}
+
+# Absolute path required: this script's PATH under systemd doesn't include
+# ~/.local/bin where the claude CLI actually lives.
+CLAUDE_BIN="/home/mephisto/.local/bin/claude"
+
+# Best-effort LLM diagnosis of a newly-broken unit, for the alert message.
+# --tools "" gives this zero write/exec capability of its own -- it can only
+# produce a (possibly wrong) string, never take action itself; the only path
+# to an actual restart is a human replying /fix <unit> in the ops chat,
+# handled separately by src/opsControl.ts. Always returns 0 and always
+# prints something, even on failure/timeout: this runs under set -e, so an
+# unguarded failure here would otherwise abort every service check after it.
+diagnose() {
+  local unit="$1" status_out journal_out prompt
+  status_out="$(systemctl status "${unit}" --no-pager -l 2>&1 | head -20)"
+  journal_out="$(journalctl -u "${unit}" -n 50 --no-pager 2>&1 | head -c 6000)"
+  prompt="You are a terse on-call SRE assistant looking at one systemd service on a personal homelab box. In 4 lines or fewer, plain text (no markdown, this goes straight into a Telegram message): (1) most likely root cause, (2) one concrete suggested fix. If the evidence doesn't point anywhere obvious, say so rather than guessing.
+
+Unit: ${unit}
+
+--- systemctl status ---
+${status_out}
+
+--- journalctl -n 50 ---
+${journal_out}"
+
+  if [[ ! -x "${CLAUDE_BIN}" ]]; then
+    echo "(diagnosis unavailable: claude CLI not found at ${CLAUDE_BIN})"
+    return 0
+  fi
+  timeout 45 "${CLAUDE_BIN}" -p "${prompt}" --tools "" --output-format text --no-session-persistence 2>/dev/null \
+    || echo "(diagnosis unavailable: claude -p failed or timed out)"
 }
 
 prev_state_for() {
@@ -106,10 +134,22 @@ for entry in "${SERVICES[@]}"; do
 
   alerted="${prev_alerted}"
   if (( problem == 1 && prev_alerted == 0 )); then
+    diagnosis=""
+    if [[ -n "${BOT_TOKEN}" && -n "${CHAT_ID}" ]]; then
+      diagnosis="$(diagnose "${unit}")"
+    fi
     if (( up == 0 )); then
-      notify "❌ ${unit} is down"
+      notify "❌ ${unit} is down
+
+${diagnosis}
+
+Reply /fix ${unit} to restart it."
     else
-      notify "⚠️ ${unit} restarted $(( nrestarts - prev_nrestarts )) time(s) since last check (currently up)"
+      notify "⚠️ ${unit} restarted $(( nrestarts - prev_nrestarts )) time(s) since last check (currently up)
+
+${diagnosis}
+
+Reply /fix ${unit} to restart it."
     fi
     alerted=1
   elif (( problem == 0 && prev_alerted == 1 )); then

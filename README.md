@@ -116,14 +116,19 @@ product bot's token, so ops alerts don't land somewhere end users can see
 them.
 
 **Service health watchdog** (`deploy/service-watchdog.sh`, a systemd timer
-every 5 minutes, read-only — never restarts anything) checks every service
-on this box two ways: is its port actually listening, not just is the unit
-"active" (a service can be active while restart-looping or with nothing
-bound), and has its restart count grown since the last check. Only state
-*transitions* page Telegram — newly broken, or newly recovered — so a
-service stuck down doesn't re-alert every 5 minutes. Covers bedrock-server,
-chatbot-app2, sift, sift-analytics, driverupdaterserver, namecheap-ddns, and
-ideavault-mcp itself.
+every 5 minutes) checks every service in `deploy/services.json` two ways: is
+its port actually listening, not just is the unit "active" (a service can be
+active while restart-looping or with nothing bound), and has its restart
+count grown since the last check. Only state *transitions* page Telegram —
+newly broken, or newly recovered — so a service stuck down doesn't re-alert
+every 5 minutes. Covers bedrock-server, chatbot-app2, sift, sift-analytics,
+driverupdaterserver, namecheap-ddns, and ideavault-mcp itself. On a newly
+broken service it also gets a short LLM diagnosis — a headless
+`claude -p` call (no tool access; it only reads the unit's recent
+`systemctl status`/`journalctl` output and returns a plain-text guess at
+root cause + fix) appended to the alert, along with a `/fix <unit>` prompt.
+The watchdog itself still never restarts anything on its own — diagnosis is
+the only thing it added; restarting requires the human reply below.
 
 **Bedrock version checker** (`deploy/bedrock-update-check.sh`, a daily
 systemd timer) checks Mojang's official download API against the version
@@ -132,16 +137,30 @@ the zip and sends the exact `migrate-bedrock-server.sh` command to run —
 deliberately notify-only, not auto-applying, since that migration script has
 never been exercised against a real update yet.
 
-**Two-way Bedrock allowlist control** (`src/bedrockControl.ts`, in-process —
-this one needs a persistent connection rather than a periodic check, so it
-runs inside the Node server rather than as a standalone script) long-polls
-the same Telegram chat for `allowlist add <name>` / `allowlist remove <name>`
-and injects the corresponding command into the running server's `screen`
-console, replying with what the server actually logged. Also sends a
-notification on every player connect. **Security:** every inbound message is
-checked against `NOTIFY_TELEGRAM_CHAT_ID` before anything is actioned — this
-executes real commands against a live server with real players on it, so
-that check is hardcoded, not configurable away.
+**Two-way ops control** (`src/opsControl.ts`, in-process — this one needs a
+persistent connection rather than a periodic check, so it runs inside the
+Node server rather than as a standalone script) long-polls the same
+Telegram chat for commands:
+- `allowlist add <name>` / `allowlist remove <name>` — injects the
+  corresponding command into the running Bedrock server's `screen` console,
+  replying with what the server actually logged. Also sends a notification
+  on every player connect.
+- `fix <unit>` — restarts a service the watchdog flagged as down (must
+  exactly match a unit in `deploy/services.json`) via a direct
+  `systemctl restart` and replies once it's confirmed healthy again (or with
+  the current state if it isn't). No `sudo` involved — this process runs
+  with `NoNewPrivileges=true`, which blocks `sudo` outright, so restart
+  authorization instead comes from a polkit rule
+  (`deploy/49-ideavault-ops-restart.rules`) scoped to exactly the units in
+  `services.json`, nothing broader. Install it with
+  `sudo cp deploy/49-ideavault-ops-restart.rules /etc/polkit-1/rules.d/`.
+
+**Security:** every inbound message is checked against
+`NOTIFY_TELEGRAM_CHAT_ID` before anything is actioned — this executes real
+commands against a live server with real players on it, and can restart real
+services, so that check is hardcoded, not configurable away. The diagnosis
+LLM call has no tool access and cannot itself trigger a restart; only an
+explicit `/fix` reply from the owner chat can.
 
 ## Local dev
 
@@ -263,6 +282,15 @@ per-conversation from the tools/connectors icon in the chat composer.
   common token/key formats (AWS, GitHub, Slack, Google, JWT). Scoped to added
   lines only, so it doesn't flag pre-existing content in touched files. A
   fresh clone needs `git config core.hooksPath .githooks` once to enable it.
+- The `/fix <unit>` ops command (see Ops automation) restarts a real service
+  on an explicit Telegram reply from the owner chat. Its authorization is a
+  polkit rule (`deploy/49-ideavault-ops-restart.rules`) scoped to exactly the
+  units in `deploy/services.json` and the `restart` verb — not the box's
+  separate, much broader passwordless-sudo config for the `mephisto` user
+  (which this path deliberately doesn't use, since `sudo` doesn't work from
+  inside this hardened process anyway). The LLM diagnosis step that runs
+  before `/fix` is offered has no tool access of its own and cannot trigger
+  a restart directly.
 
 ## Roadmap ideas (not built yet)
 

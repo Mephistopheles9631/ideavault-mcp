@@ -1,0 +1,23 @@
+// Lets the ideavault-mcp Node process (runs as mephisto, sandboxed with
+// NoNewPrivileges=true, which blocks sudo-based escalation entirely) restart
+// exactly the units in deploy/services.json via a direct, unauthenticated
+// `systemctl restart`, without granting mephisto any broader systemd rights.
+// This is the actual authorization boundary for /fix <service> in
+// src/opsControl.ts -- mephisto's separate passwordless sudo access is
+// irrelevant to this path since sudo itself doesn't work under
+// NoNewPrivileges (verified: it disables the setuid mechanism sudo needs).
+//
+// Install: sudo cp deploy/49-ideavault-ops-restart.rules /etc/polkit-1/rules.d/
+polkit.addRule(function(action, subject) {
+  const RESTARTABLE_UNITS = [
+    "bedrock-server.service", "chatbot-app2.service", "sift.service",
+    "sift-analytics.service", "driverupdaterserver.service",
+    "ideavault-mcp.service", "namecheap-ddns.service",
+  ];
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.user == "mephisto" &&
+      action.lookup("verb") == "restart" &&
+      RESTARTABLE_UNITS.indexOf(action.lookup("unit")) !== -1) {
+    return polkit.Result.YES;
+  }
+});
