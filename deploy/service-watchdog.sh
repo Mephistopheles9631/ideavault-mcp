@@ -33,6 +33,9 @@ env_value() {
 
 BOT_TOKEN="$(env_value NOTIFY_TELEGRAM_BOT_TOKEN)"
 CHAT_ID="$(env_value NOTIFY_TELEGRAM_CHAT_ID)"
+ANTHROPIC_API_KEY="$(env_value ANTHROPIC_API_KEY)"
+CLAUDE_MODEL="$(env_value CLAUDE_MODEL)"
+CLAUDE_MODEL="${CLAUDE_MODEL:-claude-haiku-4-5}"
 
 notify() {
   local text="$1"
@@ -55,19 +58,17 @@ port_listening() {
   fi
 }
 
-# Absolute path required: this script's PATH under systemd doesn't include
-# ~/.local/bin where the claude CLI actually lives.
-CLAUDE_BIN="/home/mephisto/.local/bin/claude"
-
 # Best-effort LLM diagnosis of a newly-broken unit, for the alert message.
-# --tools "" gives this zero write/exec capability of its own -- it can only
-# produce a (possibly wrong) string, never take action itself; the only path
-# to an actual restart is a human replying /fix <unit> in the ops chat,
-# handled separately by src/opsControl.ts. Always returns 0 and always
-# prints something, even on failure/timeout: this runs under set -e, so an
-# unguarded failure here would otherwise abort every service check after it.
+# Calls the Anthropic API directly (Haiku 4.5 -- a diagnosis this short costs
+# a fraction of a cent, so there's no reason to reach for anything bigger).
+# No tools are given to the model -- it can only produce a (possibly wrong)
+# string, never take action itself; the only path to an actual restart is a
+# human replying /fix <unit> in the ops chat, handled separately by
+# src/opsControl.ts. Always returns 0 and always prints something, even on
+# failure: this runs under set -e, so an unguarded failure here would
+# otherwise abort every service check after it.
 diagnose() {
-  local unit="$1" status_out journal_out prompt
+  local unit="$1" status_out journal_out prompt payload response text
   status_out="$(systemctl status "${unit}" --no-pager -l 2>&1 | head -20)"
   journal_out="$(journalctl -u "${unit}" -n 50 --no-pager 2>&1 | head -c 6000)"
   prompt="You are a terse on-call SRE assistant looking at one systemd service on a personal homelab box. In 4 lines or fewer, plain text (no markdown, this goes straight into a Telegram message): (1) most likely root cause, (2) one concrete suggested fix. If the evidence doesn't point anywhere obvious, say so rather than guessing.
@@ -80,12 +81,29 @@ ${status_out}
 --- journalctl -n 50 ---
 ${journal_out}"
 
-  if [[ ! -x "${CLAUDE_BIN}" ]]; then
-    echo "(diagnosis unavailable: claude CLI not found at ${CLAUDE_BIN})"
+  if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
+    echo "(diagnosis unavailable: ANTHROPIC_API_KEY not set in .env)"
     return 0
   fi
-  timeout 45 "${CLAUDE_BIN}" -p "${prompt}" --tools "" --output-format text --no-session-persistence 2>/dev/null \
-    || echo "(diagnosis unavailable: claude -p failed or timed out)"
+
+  payload="$(jq -n --arg model "${CLAUDE_MODEL}" --arg prompt "${prompt}" \
+    '{model: $model, max_tokens: 300, messages: [{role: "user", content: $prompt}]}')"
+
+  response="$(curl -fsS --max-time 30 https://api.anthropic.com/v1/messages \
+    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+    -H "anthropic-version: 2023-06-01" \
+    -H "content-type: application/json" \
+    -d "${payload}" 2>&1)" || {
+    echo "(diagnosis unavailable: Anthropic API call failed)"
+    return 0
+  }
+
+  text="$(jq -r '.content[0].text // empty' <<<"${response}" 2>/dev/null)" || true
+  if [[ -z "${text}" ]]; then
+    echo "(diagnosis unavailable: unexpected API response)"
+    return 0
+  fi
+  printf '%s' "${text}"
 }
 
 prev_state_for() {

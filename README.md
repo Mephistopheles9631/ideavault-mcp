@@ -123,10 +123,12 @@ count grown since the last check. Only state *transitions* page Telegram —
 newly broken, or newly recovered — so a service stuck down doesn't re-alert
 every 5 minutes. Covers bedrock-server, chatbot-app2, sift, sift-analytics,
 driverupdaterserver, namecheap-ddns, and ideavault-mcp itself. On a newly
-broken service it also gets a short LLM diagnosis — a headless
-`claude -p` call (no tool access; it only reads the unit's recent
-`systemctl status`/`journalctl` output and returns a plain-text guess at
-root cause + fix) appended to the alert, along with a `/fix <unit>` prompt.
+broken service it also gets a short LLM diagnosis — a direct Anthropic API
+call to Claude Haiku 4.5 (`ANTHROPIC_API_KEY`/`CLAUDE_MODEL` in `.env`; no
+tool access — it only reads the unit's recent `systemctl status`/`journalctl`
+output and returns a plain-text guess at root cause + fix) appended to the
+alert, along with a `/fix <unit>` prompt. At this volume (a handful of short
+calls per problem) cost is a rounding error — well under a dollar a year.
 The watchdog itself still never restarts anything on its own — diagnosis is
 the only thing it added; restarting requires the human reply below.
 
