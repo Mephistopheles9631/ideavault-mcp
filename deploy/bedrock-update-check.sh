@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Checks Mojang's official download API for a newer Bedrock Dedicated Server
-# release than the one bedrock-server.service is currently running. Never
-# applies anything -- migrate-bedrock-server.sh has never run against a real
-# update yet, so this stays notify-only until that's been watched work once.
-# On finding a new version it downloads the zip to ~/Downloads and sends the
-# exact migrate-bedrock-server.sh command to run, via the same ops Telegram
-# channel as service-watchdog.sh. Only notifies once per new version (a state
-# file tracks the last version already alerted on), not on every run while
-# it's sitting unapplied.
+# release than the one bedrock-server.service is currently running.
+#
+# NOTIFY ONLY - this never applies anything. On finding a new version it
+# downloads the zip to ~/Downloads and sends the exact command to run, via the
+# ops Telegram channel. Applying is done deliberately by hand with
+# FamilyMinecraftServer/tools/update.sh, which backs up the world while
+# stopped, verifies the new install before swapping, and auto-rolls-back.
+#
+# Only notifies once per new version (a state file tracks the last version
+# already alerted on), not on every run while it sits unapplied.
+#
+# The old ~/bin/bedrock-version-check.sh auto-applied updates unattended and
+# has been disabled; see FamilyMinecraftServer/docs/SERVER-OPS.md section 6.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,9 +51,16 @@ if [[ -z "${current_workdir}" ]]; then
   echo "bedrock-update-check: could not read bedrock-server.service WorkingDirectory, skipping" >&2
   exit 0
 fi
-current_version="$(basename "${current_workdir}" | sed -n 's/^bedrock-server-//p')"
+# The install directory is now permanently named "Current" (see
+# FamilyMinecraftServer/docs/SERVER-OPS.md), so the version can no longer be
+# read from its name. The updater stamps it into .bds-version; fall back to
+# the old bedrock-server-<version> naming for any pre-restructure install.
+current_version="$(cat "${current_workdir}/.bds-version" 2>/dev/null | tr -d '[:space:]')"
 if [[ -z "${current_version}" ]]; then
-  echo "bedrock-update-check: could not parse a version out of '${current_workdir}', skipping" >&2
+  current_version="$(basename "${current_workdir}" | sed -n 's/^bedrock-server-//p')"
+fi
+if [[ -z "${current_version}" ]]; then
+  echo "bedrock-update-check: could not determine the running version from '${current_workdir}' (no .bds-version stamp), skipping" >&2
   exit 0
 fi
 
@@ -86,12 +98,19 @@ if curl -fsS --max-time 1800 -H "User-Agent: ${BROWSER_UA}" -H "Cookie: eula=tru
 
 Downloaded to ${zip_path}. To apply:
 
-migrate-bedrock-server.sh \\
-  ${current_workdir} \\
-  ${zip_path} \\
-  ${HOME}/bedrock-server-${latest_version}"
+cd ~/FamilyMinecraftServer && ./tools/update.sh live --apply --zip ${zip_path}
+
+(test first:  ./tools/update.sh test --apply --zip ${zip_path})"
   notify "${notify}"
   printf '%s' "${latest_version}" > "${STATE_FILE}"
+
+  # Each release parked here is ~100 MB and this runs daily, so without a
+  # prune the download dir grows without bound. Keeps the newest few plus
+  # whatever live/test are actually running; never fatal.
+  PRUNER="${HOME}/FamilyMinecraftServer/tools/prune-versions.sh"
+  if [[ -x "${PRUNER}" ]]; then
+    "${PRUNER}" --apply || echo "bedrock-update-check: prune-versions.sh failed, skipping cleanup" >&2
+  fi
 else
   notify "🎮 New Bedrock server version detected: ${latest_version} (currently running ${current_version}), but the download failed. Check bedrock-update-check.sh manually."
 fi
